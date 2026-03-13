@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.log
+*.tmp
+*.24o
+*.24n
+*.obs
+*.nav
+*.rnx
