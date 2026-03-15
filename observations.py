@@ -1,15 +1,20 @@
 import georinex as gr
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
 
+# ----------------------------
+# LOAD RINEX OBSERVATION FILE
+# ----------------------------
+
 obs = gr.load("iisc0200.24o")
+
 print(obs)
 
 gps_sats = [sv for sv in obs.sv.values if sv.startswith("G")]
 print(gps_sats[:10])
 
-sat = gps_sats[0]
+# Select first satellite for testing
+sat = gps_sats[3]
 
 L1 = obs["L1"].sel(sv=sat).values
 L2 = obs["L2"].sel(sv=sat).values
@@ -54,7 +59,7 @@ time_valid = time[valid]
 print("Valid epochs:", len(time_valid))
 
 # ----------------------------
-# MELBOURNE-WUBBENA
+# MELBOURNE-WUBBENA COMBINATION
 # ----------------------------
 
 MW = (L1*lambda1 - L2*lambda2 - (P1 - P2)) / lambda_wl
@@ -63,22 +68,74 @@ print("MW sample values:")
 print(MW[:10])
 
 # ----------------------------
-# CYCLE SLIP DETECTION
+# DATA GAP DETECTION
 # ----------------------------
 
-window = 30
+interval = 30  # expected sampling interval (seconds)
+gap_threshold = 1.5 * interval
 
+time_sec = time_valid.astype('datetime64[s]').astype(int)
+
+gap_epochs = []
+
+for i in range(1, len(time_sec)):
+    if time_sec[i] - time_sec[i-1] > gap_threshold:
+        gap_epochs.append(i)
+
+# ----------------------------
+# MW CYCLE SLIP DETECTION
+# ----------------------------
+
+window = 20
 slips = []
 
-for i in range(window, len(MW)):
+i = window
 
-    mean_MW = np.mean(MW[i-window:i])
-    std_MW = np.std(MW[i-window:i])
+while i < len(MW):
+
+    mean_MW = np.nanmean(MW[i-window:i])
+    std_MW = np.nanstd(MW[i-window:i])
+
+    if std_MW == 0:
+        i += 1
+        continue
 
     if abs(MW[i] - mean_MW) > 4 * std_MW:
         slips.append(i)
 
-print("Number of cycle slips detected:", len(slips))
+        # reset window after slip
+        i += window
+    else:
+        i += 1
+
+# ----------------------------
+# PRINT DETECTED EVENTS
+# ----------------------------
+
+print("\nCycle Slips Detected:")
+
+for s in slips:
+
+    jump = MW[s] - MW[s-1]
+
+    print(
+        f"CS | Time: {time_valid[s]} | Satellite: {sat} | MW Jump: {jump:.2f} cycles"
+    )
+
+
+print("\nData Gaps Detected:")
+
+for g in gap_epochs:
+
+    gap = time_sec[g] - time_sec[g-1]
+
+    print(
+        f"GAP | Time: {time_valid[g]} | Satellite: {sat} | Gap: {gap} seconds"
+    )
+
+# ----------------------------
+# PLOT RESULTS
+# ----------------------------
 
 plt.figure(figsize=(10,4))
 
@@ -86,6 +143,9 @@ plt.plot(time_valid, MW, label="MW")
 
 plt.scatter(time_valid[slips], MW[slips],
             color='red', label="Detected Slip")
+
+plt.scatter(time_valid[gap_epochs], MW[gap_epochs],
+            color='orange', label="Data Gap")
 
 plt.title(f"Cycle Slip Detection - {sat}")
 plt.xlabel("Time")
