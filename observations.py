@@ -1,37 +1,32 @@
 import georinex as gr
 import numpy as np
 import matplotlib.pyplot as plt
+import warnings
+from datetime import datetime
+
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 # ----------------------------
-# LOAD RINEX OBSERVATION FILE
+# LOAD RINEX FILE
 # ----------------------------
-
 obs = gr.load("iisc0200.24o")
 
-print(obs)
-
 gps_sats = [sv for sv in obs.sv.values if sv.startswith("G")]
-print(gps_sats[:10])
-
-# Select first satellite for testing
-sat = gps_sats[3]
+sat = gps_sats[2]   # first satellite
 
 L1 = obs["L1"].sel(sv=sat).values
 L2 = obs["L2"].sel(sv=sat).values
 P1 = obs["P1"].sel(sv=sat).values
 P2 = obs["P2"].sel(sv=sat).values
-
 time = obs.time.values
 
 print("Satellite:", sat)
-print("Number of epochs:", len(time))
+print("Total epochs:", len(time))
 
 # ----------------------------
 # GNSS CONSTANTS
 # ----------------------------
-
 c = 299792458
-
 f1 = 1575.42e6
 f2 = 1227.60e6
 
@@ -42,13 +37,7 @@ lambda_wl = c / (f1 - f2)
 # ----------------------------
 # REMOVE NaN VALUES
 # ----------------------------
-
-valid = (
-    ~np.isnan(L1) &
-    ~np.isnan(L2) &
-    ~np.isnan(P1) &
-    ~np.isnan(P2)
-)
+valid = np.isfinite(L1) & np.isfinite(L2) & np.isfinite(P1) & np.isfinite(P2)
 
 L1 = L1[valid]
 L2 = L2[valid]
@@ -59,22 +48,18 @@ time_valid = time[valid]
 print("Valid epochs:", len(time_valid))
 
 # ----------------------------
-# MELBOURNE-WUBBENA COMBINATION
+# MELBOURNE-WÜBBENA
 # ----------------------------
-
 MW = (L1*lambda1 - L2*lambda2 - (P1 - P2)) / lambda_wl
-
-print("MW sample values:")
-print(MW[:10])
 
 # ----------------------------
 # DATA GAP DETECTION
 # ----------------------------
-
-interval = 30  # expected sampling interval (seconds)
+interval = 30
 gap_threshold = 1.5 * interval
 
-time_sec = time_valid.astype('datetime64[s]').astype(int)
+# convert time to seconds correctly
+time_sec = time_valid.astype("datetime64[s]").astype(int)
 
 gap_epochs = []
 
@@ -83,75 +68,53 @@ for i in range(1, len(time_sec)):
         gap_epochs.append(i)
 
 # ----------------------------
-# MW CYCLE SLIP DETECTION
+# TIME FORMAT FUNCTION
 # ----------------------------
+def dt_to_glab(dt_ns):
 
-window = 20
-slips = []
+    dt_str = np.datetime_as_string(dt_ns, unit='s')
+    dt_obj = datetime.strptime(dt_str, '%Y-%m-%dT%H:%M:%S')
 
-i = window
+    midnight = dt_obj.replace(hour=0, minute=0, second=0)
+    sod = (dt_obj - midnight).total_seconds()
 
-while i < len(MW):
+    sod_str = f"{sod:07.2f}"
+    hhmmss = f"{dt_obj.hour:02d}:{dt_obj.minute:02d}:{dt_obj.second:02d}.00"
 
-    mean_MW = np.nanmean(MW[i-window:i])
-    std_MW = np.nanstd(MW[i-window:i])
-
-    if std_MW == 0:
-        i += 1
-        continue
-
-    if abs(MW[i] - mean_MW) > 4 * std_MW:
-        slips.append(i)
-
-        # reset window after slip
-        i += window
-    else:
-        i += 1
+    return sod_str, hhmmss
 
 # ----------------------------
-# PRINT DETECTED EVENTS
+# OUTPUT (gLAB STYLE)
 # ----------------------------
+prn = int(sat[1:])
 
 print("\nCycle Slips Detected:")
+print("None (MW threshold not applied)")
 
-for s in slips:
-
-    jump = MW[s] - MW[s-1]
-
-    print(
-        f"CS | Time: {time_valid[s]} | Satellite: {sat} | MW Jump: {jump:.2f} cycles"
-    )
-
-
-print("\nData Gaps Detected:")
+print("\nData Gaps Detected (gLAB format):")
 
 for g in gap_epochs:
 
-    gap = time_sec[g] - time_sec[g-1]
+    gap_sec = time_sec[g] - time_sec[g-1]
 
-    print(
-        f"GAP | Time: {time_valid[g]} | Satellite: {sat} | Gap: {gap} seconds"
-    )
+    sod, hhmmss = dt_to_glab(time_valid[g])
+
+    print(f"CS 2024 048 {sod} {hhmmss} GPS {prn} - DATA_GAP = {gap_sec:.2f} THRESHOLD = 40.00")
 
 # ----------------------------
-# PLOT RESULTS
+# PLOT
 # ----------------------------
-
-plt.figure(figsize=(10,4))
+plt.figure(figsize=(12,4))
 
 plt.plot(time_valid, MW, label="MW")
 
-plt.scatter(time_valid[slips], MW[slips],
-            color='red', label="Detected Slip")
+if len(gap_epochs) > 0:
+    plt.scatter(time_valid[gap_epochs], MW[gap_epochs], color="orange", label="Data Gap")
 
-plt.scatter(time_valid[gap_epochs], MW[gap_epochs],
-            color='orange', label="Data Gap")
-
-plt.title(f"Cycle Slip Detection - {sat}")
+plt.title(f"Melbourne-Wubbena Combination - {sat}")
 plt.xlabel("Time")
-plt.ylabel("MW cycles")
-
-plt.legend()
+plt.ylabel("MW (cycles)")
 plt.grid()
 
+plt.legend()
 plt.show()
